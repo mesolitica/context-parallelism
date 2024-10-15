@@ -1,11 +1,11 @@
-# context-parallelism-xformers
+# context-parallelism
 
-Context Parallelism using Xformers, support,
+Context Parallelism, support,
 
 1. Blockwise Attention, https://arxiv.org/abs/2305.19370
 2. Ring Attention, https://arxiv.org/abs/2310.01889
 3. Tree Attention, https://arxiv.org/abs/2408.04093
 
-## Why Xformers
+## 2024-10-15 update
 
-Xformers implemented partial attention, https://facebookresearch.github.io/xformers/_modules/xformers/ops/fmha.html#memory_efficient_attention_partial and the parameters are straight forward.
+Drop Xformers because partial attention from Xformers does not support custom masking, and this necessary especially for causal. So we build our flash attention custom masking forked from https://github.com/alexzhang13/flashattention2-custom-mask
