@@ -8,4 +8,4 @@ Context Parallelism, support,
 
 ## 2024-10-15 update
 
-Drop Xformers because partial attention from Xformers does not support custom masking, and this necessary especially for causal. So we build our flash attention custom masking forked from https://github.com/alexzhang13/flashattention2-custom-mask
+Drop Xformers because partial attention from Xformers does not support custom masking, and this necessary especially for causal. So we build our flash attention custom masking forked from https://github.com/alexzhang13/flashattention2-custom-mask that also returned proper LSE.
