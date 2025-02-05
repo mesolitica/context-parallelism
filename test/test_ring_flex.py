@@ -6,7 +6,7 @@ import os
 if __name__ == "__main__":
     world_size = int(os.environ['LOCAL_WORLD_SIZE'])
     local_rank = int(os.environ['LOCAL_RANK'])
-    dist.init_process_group(backend='gloo')
+    dist.init_process_group(backend='nccl')
 
     batch_size = 1
     seqlen = 128
@@ -30,8 +30,14 @@ if __name__ == "__main__":
     k = local_qkv[1]
     v = local_qkv[2]
 
+    q.retain_grad()
+    k.retain_grad()
+    v.retain_grad()
+
     out, lse = ring_flex_attn(q=q, k=k, v=v)
-    print(out.shape)
+    print(out)
+    out.sum().backward()
+    print(q.grad)
 
 """
 CUDA_VISIBLE_DEVICES=2 torchrun \

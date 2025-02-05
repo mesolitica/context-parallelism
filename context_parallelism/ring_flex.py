@@ -9,7 +9,7 @@ def _forward(
     k: torch.Tensor,
     v: torch.Tensor,
     scale: float,
-    causal=True,
+    causal: bool = True,
 ):
     """
     q: [B, H, L, D]
@@ -50,19 +50,62 @@ def _backward(
     out,
     lse,
     scale,
+    causal=True,
 ):
     kv_comm = RingComm(process_group)
     d_kv_comm = RingComm(process_group)
     dq, dk, dv = None, None, None
     next_dk, next_dv = None, None
 
-    block_dq_buffer = torch.empty(q.shape, dtype=q.dtype, device=q.device)
-    block_dk_buffer = torch.empty(k.shape, dtype=k.dtype, device=k.device)
-    block_dv_buffer = torch.empty(v.shape, dtype=v.dtype, device=v.device)
-
     next_dk, next_dv = None, None
     next_k, next_v = None, None
+
+    L = q.shape[-2]
+
+    for step in range(kv_comm.world_size):
+        if step + 1 != kv_comm.world_size:
+            next_k, next_v = kv_comm.send_recv_kv(k, v)
+
+        if step <= kv_comm.rank or not causal:
+            bwd_causal = causal and step == 0
+
+            """
+            Currently not efficient, manual backprop and this can explode the memory because of quadratic.
+            """
+
+            dsoftmax = dout * out - (dout * out).sum(dim=-1, keepdim=True) * out
+            if bwd_causal:
+                causal_mask = torch.tril(torch.ones((L, L), device=dsoftmax.device, dtype=dsoftmax.dtype))
+                dsoftmax = dsoftmax * causal_mask
+            
+            block_dq_buffer = dsoftmax @ k.transpose(-2, -1)
+            block_dk_buffer = q.transpose(-2, -1) @ dsoftmax
+            block_dv_buffer = dsoftmax @ v
+
+            if dq is None:
+                dq = block_dq_buffer.to(torch.float32)
+                dk = block_dk_buffer.to(torch.float32)
+                dv = block_dv_buffer.to(torch.float32)
+            else:
+                dq += block_dq_buffer
+                d_kv_comm.wait()
+                dk = block_dk_buffer + next_dk
+                dv = block_dv_buffer + next_dv
+        
+        elif step != 0:
+            d_kv_comm.wait()
+            dk, dv = next_dk, next_dv
+
+        if step + 1 != kv_comm.world_size:
+            kv_comm.wait()
+            k, v = next_k, next_v
+        
+        next_dk, next_dv = d_kv_comm.send_recv_kv(dk, dv)
     
+    d_kv_comm.wait()
+    
+    return dq.to(q.dtype), next_dk.to(q.dtype), next_dv.to(q.dtype)
+
 
 class RingFlexAttnFunc(torch.autograd.Function):
     @staticmethod
@@ -80,13 +123,7 @@ class RingFlexAttnFunc(torch.autograd.Function):
 
         k = k.contiguous()
         v = v.contiguous()
-        out, lse = _forward(
-            group,
-            q,
-            k,
-            v,
-            scale=scale,
-        )
+        out, lse = _forward(group, q, k, v, scale=scale)
         ctx.save_for_backward(q, k, v, out, lse)
         ctx.scale = scale
         ctx.causal = causal
@@ -96,21 +133,17 @@ class RingFlexAttnFunc(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dout, *args):
         q, k, v, out, lse = ctx.saved_tensors
-        # dq, dk, dv = ring_flash_attn_backward(
-        #     ctx.group,
-        #     dout,
-        #     q,
-        #     k,
-        #     v,
-        #     out,
-        #     softmax_lse,
-        #     softmax_scale=ctx.softmax_scale,
-        #     dropout_p=ctx.dropout_p,
-        #     causal=ctx.causal,
-        #     window_size=ctx.window_size,
-        #     alibi_slopes=ctx.alibi_slopes,
-        #     deterministic=ctx.deterministic,
-        # )
+        dq, dk, dv = _backward(
+            ctx.group,
+            dout,
+            q,
+            k,
+            v,
+            out,
+            lse,
+            scale=ctx.scale,
+            causal=ctx.causal,
+        )
         return dq, dk, dv, None, None, None
 
 def ring_flex_attn(
@@ -121,11 +154,4 @@ def ring_flex_attn(
     causal=False,
     group=None,
 ):
-    return RingFlexAttnFunc.apply(
-        q,
-        k,
-        v,
-        scale,
-        causal,
-        group,
-    )
+    return RingFlexAttnFunc.apply(q, k, v, scale, causal, group)
