@@ -4,6 +4,7 @@ from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import torch
 import torch.distributed as dist
 import os
+import math
 
 if __name__ == "__main__":
     world_size = int(os.environ['LOCAL_WORLD_SIZE'])
@@ -36,15 +37,13 @@ if __name__ == "__main__":
     k.retain_grad()
     v.retain_grad()
 
-    out, lse = ring_flex_attn(q=q, k=k, v=v)
+    out, lse = ring_flex_attn(q=q, k=k, v=v, causal=True)
     out_clone = out.clone()
     out.sum().backward()
 
     q_grad = q.grad.clone()
     k_grad = k.grad.clone()
     v_grad = v.grad.clone()
-
-    print(q_grad.shape, k_grad.shape, v_grad.shape)
 
     q = qkv[0]
     k = qkv[1]
@@ -59,13 +58,13 @@ if __name__ == "__main__":
     out = flex_attention(q, k, v, block_mask=block_mask, scale=scale)
     out.sum().backward()
 
-    print((out_clone - out).abs().max())
+    local_rank
+    length = local_qkv.shape[-2]
+    start_length = int(local_rank * length)
+    end_length = int((local_rank + 1) * length)
 
-    print(q.grad.shape)
-    print((q_grad - q.grad).abs().max())
-
-
-
+    assert (out_clone - out[:,:,start_length:end_length]).abs().max() < 1e-5
+    assert (q_grad - q.grad[:,:,start_length:end_length]).abs().max() < 1e-5
 
 
 """

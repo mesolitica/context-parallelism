@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+import math
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 from .utils import merge_attention, RingComm, causal_mask
 
@@ -144,9 +145,7 @@ def _backward(
         if step + 1 != kv_comm.world_size:
             next_k, next_v = kv_comm.send_recv_kv(k, v)
 
-        if step <= kv_comm.rank or not causal:
-            bwd_causal = causal and step == 0
-
+        if not causal or step <= kv_comm.rank:
             if causal and step == 0:
                 block_mask = create_block_mask(causal_mask, None, None, q.shape[-2], q.shape[-2])
             else:
