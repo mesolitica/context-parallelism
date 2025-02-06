@@ -34,6 +34,7 @@ class RingComm:
     def send_recv(
         self, to_send: torch.Tensor, recv_tensor: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
+        
         if recv_tensor is None:
             res = torch.empty_like(to_send)
         else:
