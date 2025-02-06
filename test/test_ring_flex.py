@@ -1,4 +1,6 @@
 from context_parallelism import ring_flex_attn
+from context_parallelism.utils import causal_mask
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import torch
 import torch.distributed as dist
 import os
@@ -21,7 +23,7 @@ if __name__ == "__main__":
     assert d % 8 == 0
 
     qkv = torch.randn(
-        3, batch_size, nheads, seqlen, d, device=device, dtype=dtype, requires_grad=False
+        3, batch_size, nheads, seqlen, d, device=device, dtype=dtype, requires_grad=True,
     )
     dist.broadcast(qkv, src=0)
     local_qkv = qkv.chunk(world_size, dim=-2)[local_rank].detach().clone()
@@ -35,9 +37,36 @@ if __name__ == "__main__":
     v.retain_grad()
 
     out, lse = ring_flex_attn(q=q, k=k, v=v)
-    print(out)
+    out_clone = out.clone()
     out.sum().backward()
-    print(q.grad)
+
+    q_grad = q.grad.clone()
+    k_grad = k.grad.clone()
+    v_grad = v.grad.clone()
+
+    print(q_grad.shape, k_grad.shape, v_grad.shape)
+
+    q = qkv[0]
+    k = qkv[1]
+    v = qkv[2]
+
+    q.retain_grad()
+    k.retain_grad()
+    v.retain_grad()
+
+    scale = q.shape[-1] ** (-0.5)
+    block_mask = create_block_mask(causal_mask, None, None, q.shape[-2], q.shape[-2])
+    out = flex_attention(q, k, v, block_mask=block_mask, scale=scale)
+    out.sum().backward()
+
+    print((out_clone - out).abs().max())
+
+    print(q.grad.shape)
+    print((q_grad - q.grad).abs().max())
+
+
+
+
 
 """
 CUDA_VISIBLE_DEVICES=2 torchrun \

@@ -4,7 +4,7 @@ from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 from .utils import merge_attention, RingComm, causal_mask
 
 """
-For those who dont understand Blockwise Ring Attention,
+Quick intro about Blockwise Ring Attention,
 
 For simplicity sake, let say, we have 2 GPUs with seqlen of 4, partitioned to 2, 4 / 2 = 2, 2
 
@@ -23,62 +23,59 @@ q1    o o | o x
 
 For GPU 0
 
-cp_rank = 0
-cp_world_size = 2
-send = (cp_rank + 1) % cp_world_size = 1
-receive = (cp_rank - 1) % cp_world_size = 1
-k = k0
-v = v0
-
-step == 0
-    if step + 1 != comm.world_size: True
-        send k, v to send
-        receive v1, v1 from receive
-
-    if not is_causal or step <= comm.rank: True
-        calculate attention with is_causal and step == 0, so this causal
-
-    if step + 1 != comm.world_size: True
-    k = k1
-    v = v1
-
-step == 1
-
-    if step + 1 != comm.world_size: False
-    if not is_causal or step <= comm.rank: False
-    if step + 1 != comm.world_size: False
-
-For GPU 1
-
-cp_rank = 1
-cp_world_size = 2
-send = (cp_rank + 1) % cp_world_size = 0
-receive = (cp_rank - 1) % cp_world_size = 0
-k = k1
-v = v1
-
-step == 0
-    if step + 1 != comm.world_size: True
-
-        send k, v to send
-        receive k0, v0 from receive
-
-    if not is_causal or step <= comm.rank: True
-
-        calculate attention with is_causal and step == 0, so this causal
-
-    if step + 1 != comm.world_size: True
+    cp_rank = 0
+    cp_world_size = 2
+    send = (cp_rank + 1) % cp_world_size = 1
+    receive = (cp_rank - 1) % cp_world_size = 1
     k = k0
     v = v0
 
-step == 1
-    if step + 1 != comm.world_size: False
+    step == 0
+        if step + 1 != comm.world_size: True
+            send k, v to send
+            receive v1, v1 from receive
 
-    if not is_causal or step <= comm.rank: True
+        if not is_causal or step <= comm.rank: True
+            calculate attention with is_causal and step == 0, so this causal
 
-        calculate attention with is_causal and step == 1, full attention
+        if step + 1 != comm.world_size: True
+        k = k1
+        v = v1
 
-    if step + 1 != comm.world_size: False
+    step == 1
+
+        if step + 1 != comm.world_size: False
+        if not is_causal or step <= comm.rank: False
+        if step + 1 != comm.world_size: False
+
+For GPU 1
+
+    cp_rank = 1
+    cp_world_size = 2
+    send = (cp_rank + 1) % cp_world_size = 0
+    receive = (cp_rank - 1) % cp_world_size = 0
+    k = k1
+    v = v1
+
+    step == 0
+        if step + 1 != comm.world_size: True
+            send k, v to send
+            receive k0, v0 from receive
+
+        if not is_causal or step <= comm.rank: True
+            calculate attention with is_causal and step == 0, so this causal
+
+        if step + 1 != comm.world_size: True
+        k = k0
+        v = v0
+
+    step == 1
+        if step + 1 != comm.world_size: False
+
+        if not is_causal or step <= comm.rank: True
+            calculate attention with is_causal and step == 1, full attention
+
+        if step + 1 != comm.world_size: False
 
 Everything hit as it is.
 """
@@ -124,6 +121,7 @@ def _forward(
 def _backward(
     process_group,
     dout,
+    dlse,
     q,
     k,
     v,
@@ -149,18 +147,17 @@ def _backward(
         if step <= kv_comm.rank or not causal:
             bwd_causal = causal and step == 0
 
-            """
-            Currently not efficient, manual backprop and this can explode the memory because of quadratic.
-            """
+            if causal and step == 0:
+                block_mask = create_block_mask(causal_mask, None, None, q.shape[-2], q.shape[-2])
+            else:
+                block_mask = None
 
-            dsoftmax = dout * out - (dout * out).sum(dim=-1, keepdim=True) * out
-            if bwd_causal:
-                causal_mask = torch.tril(torch.ones((L, L), device=dsoftmax.device, dtype=dsoftmax.dtype))
-                dsoftmax = dsoftmax * causal_mask
-            
-            block_dq_buffer = dsoftmax @ k.transpose(-2, -1)
-            block_dk_buffer = q.transpose(-2, -1) @ dsoftmax
-            block_dv_buffer = dsoftmax @ v
+            with torch.enable_grad():
+                block_out = flex_attention(q, k, v, block_mask=block_mask, scale=scale)
+            out = block_out.grad_fn.apply(dout, dlse)
+            block_dq_buffer = out[0]
+            block_dk_buffer = out[1]
+            block_dv_buffer = out[2]
 
             if dq is None:
                 dq = block_dq_buffer.to(torch.float32)
@@ -211,11 +208,12 @@ class RingFlexAttnFunc(torch.autograd.Function):
         return out, lse
 
     @staticmethod
-    def backward(ctx, dout, *args):
+    def backward(ctx, dout, dlse, *args):
         q, k, v, out, lse = ctx.saved_tensors
         dq, dk, dv = _backward(
             ctx.group,
             dout,
+            dlse,
             q,
             k,
             v,
