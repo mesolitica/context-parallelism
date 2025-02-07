@@ -71,14 +71,14 @@ if __name__ == "__main__":
 
     print(local_rank, 'out', (out_clone - out[:,:,start_length:end_length]).abs().max())
     print(local_rank, 'lse', (lse_clone - lse[:,:,start_length:end_length]).abs().max())
-    print(local_rank, 'q', (q_grad - q.grad[:,:,start_length:end_length]).abs().max())
-    print(local_rank, 'k', (k_grad - k.grad[:,:,start_length:end_length]).abs().max())
-    print(local_rank, 'v', (v_grad - v.grad[:,:,start_length:end_length]).abs().max())
+    print(local_rank, 'q.grad', (q_grad - q.grad[:,:,start_length:end_length]).abs().max())
+    print(local_rank, 'k.grad', (k_grad - k.grad[:,:,start_length:end_length]).abs().max())
+    print(local_rank, 'v.grad', (v_grad - v.grad[:,:,start_length:end_length]).abs().max())
 
-    assert (out_clone - out[:,:,start_length:end_length]).abs().max() < 1e-2
-    assert (q_grad - q.grad[:,:,start_length:end_length]).abs().max() < 1e-2
-    assert (k_grad - k.grad[:,:,start_length:end_length]).abs().max() < 1e-2
-    assert (v_grad - v.grad[:,:,start_length:end_length]).abs().max() < 1e-2
+    assert (out_clone - out[:,:,start_length:end_length]).abs().max() < 1e-3
+    assert (q_grad - q.grad[:,:,start_length:end_length]).abs().max() < 1e-3
+    assert (k_grad - k.grad[:,:,start_length:end_length]).abs().max() < 1e-3
+    assert (v_grad - v.grad[:,:,start_length:end_length]).abs().max() < 1e-3
 
 
 """

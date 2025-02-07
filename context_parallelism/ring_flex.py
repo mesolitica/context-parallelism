@@ -159,17 +159,6 @@ def _backward(
             next_k, next_v = kv_comm.send_recv_kv(k, v)
 
         if not causal or step <= kv_comm.rank:
-            if causal and step == 0:
-                block_mask = create_block_mask(
-                    causal_mask, 
-                    None, 
-                    None, 
-                    q.shape[-2], 
-                    q.shape[-2], 
-                    device = kv_comm.rank,
-                )
-            else:
-                block_mask = None
             
             """
             https://github.com/pytorch/pytorch/blob/main/torch/_higher_order_ops/flex_attention.py#L763
@@ -189,8 +178,10 @@ def _backward(
                 score_mod_other_buffers: Tuple,
                 mask_mod_other_buffers: Tuple,
             ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple[Optional[torch.Tensor], ...]]
+
+            Not sure how to use manual backprop from PyTorch
             """
-            
+
             """
             This is not correct yet because `block_out.grad_fn` store local LSE,
             i need to find a way to inject global LSE or use manual backward
