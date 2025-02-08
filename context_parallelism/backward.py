@@ -1,4 +1,5 @@
 import torch
+import math
 
 kernel_options = {'PRESCALE_QK': False, 'ROWS_GUARANTEED_SAFE': False, 'BLOCKS_ARE_CONTIGUOUS': False, 'OUTPUT_LOGSUMEXP': True}
 
@@ -29,7 +30,6 @@ def attention_backward(
     causal=False,
 ):
     l = query.shape[-2]
-    logsumexp = logsumexp * math.log(2)
     grad_logsumexp = grad_logsumexp / math.log(2)
     scores = query.to(torch.float32) @ key.to(torch.float32).transpose(-2, -1) * scale
 
@@ -37,12 +37,14 @@ def attention_backward(
         mask = torch.triu(torch.ones(l, l), diagonal=1).bool()
         scores = scores.masked_fill(mask.to(scores.device), float('-inf'))
 
+    post_mod_scores = scores
     masked_out_rows = logsumexp == -float('inf')
     softmax_scores = torch.exp(post_mod_scores - logsumexp.unsqueeze(-1))
     softmax_scores = torch.where(masked_out_rows.unsqueeze(-1), 0, softmax_scores)
     
     grad_value = softmax_scores.to(query.dtype).transpose(-2, -1) @ grad_out
-    grad_query = None
-    grad_key = None
+    grad_query = torch.zeros(query.shape).to(query.device)
+    grad_key = torch.zeros(key.shape).to(query.device)
+    print('grad_value aaaa', grad_value)
     return grad_query, grad_key, grad_value
 

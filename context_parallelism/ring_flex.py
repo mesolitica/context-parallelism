@@ -3,6 +3,7 @@ import torch.distributed as dist
 import math
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 from .utils import merge_attention, RingComm, causal_mask
+from .backward import attention_backward
 
 """
 Quick intro about Blockwise Ring Attention,
@@ -105,27 +106,29 @@ def _forward(
             next_k, next_v = comm.send_recv_kv(k, v)
 
         if not causal or step <= comm.rank:
-            if causal and step == 0:
-                block_mask = create_block_mask(
-                    causal_mask, 
-                    None, 
-                    None, 
-                    q.shape[-2], 
-                    q.shape[-2], 
-                    device = comm.rank
-                )
-            else:
-                block_mask = None
 
-            block_out, block_lse = flex_attention(
-                q, 
-                k, 
-                v, 
-                block_mask=block_mask, 
-                scale=scale, 
-                return_lse=True
-            )
-            out, lse = merge_attention(out, lse, block_out, block_lse)
+            with torch.no_grad():
+                if causal and step == 0:
+                    block_mask = create_block_mask(
+                        causal_mask, 
+                        None, 
+                        None, 
+                        q.shape[-2], 
+                        q.shape[-2], 
+                        device = comm.rank
+                    )
+                else:
+                    block_mask = None
+
+                block_out, block_lse = flex_attention(
+                    q, 
+                    k, 
+                    v, 
+                    block_mask=block_mask, 
+                    scale=scale, 
+                    return_lse=True
+                )
+                out, lse = merge_attention(out, lse, block_out, block_lse)
 
         if step + 1 != comm.world_size:
             comm.wait()
@@ -185,7 +188,7 @@ def _backward(
             """
             This is not correct yet because `block_out.grad_fn` store local LSE,
             i need to find a way to inject global LSE or use manual backward
-            """
+
             with torch.enable_grad():
                 block_out, block_lse = flex_attention(q, k, v, block_mask=block_mask, scale=scale, 
                 return_lse = True)
@@ -196,7 +199,23 @@ def _backward(
             block_dq_buffer = out[0]
             block_dk_buffer = out[1]
             block_dv_buffer = out[2]
+            """
 
+            o = attention_backward(
+                query=q,
+                key=k,
+                value=v,
+                out=out,
+                logsumexp=lse,
+                grad_out=dout,
+                grad_logsumexp=dlse,
+                scale=scale,
+                causal=causal and step == 0
+            )
+            block_dq_buffer = o[0]
+            block_dk_buffer = o[1]
+            block_dv_buffer = o[2]
+            
             if dq is None:
                 dq = block_dq_buffer.to(torch.float32)
                 dk = block_dk_buffer.to(torch.float32)
