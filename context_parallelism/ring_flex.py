@@ -166,50 +166,12 @@ def _backward(
 
         if not causal or step <= kv_comm.rank:
             
-            """
-            https://github.com/pytorch/pytorch/blob/main/torch/_higher_order_ops/flex_attention.py#L763
-            sdpa_dense_backward(
-                query: torch.Tensor,
-                key: torch.Tensor,
-                value: torch.Tensor,
-                out: torch.Tensor,
-                logsumexp: torch.Tensor,
-                grad_out: torch.Tensor,
-                grad_logsumexp: torch.Tensor,
-                fw_graph: Callable,
-                joint_graph: Callable,
-                block_mask: Tuple,
-                scale: float,
-                kernel_options: Dict[str, Any],
-                score_mod_other_buffers: Tuple,
-                mask_mod_other_buffers: Tuple,
-            ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple[Optional[torch.Tensor], ...]]
-
-            Not sure how to use manual backprop from PyTorch
-            """
-
-            """
-            This is not correct yet because `block_out.grad_fn` store local LSE,
-            i need to find a way to inject global LSE or use manual backward
-
-            with torch.enable_grad():
-                block_out, block_lse = flex_attention(q, k, v, block_mask=block_mask, scale=scale, 
-                return_lse = True)
-            if kv_comm.rank > 0:
-                print(step, causal and step == 0, block_lse, lse)
-            out = block_out.grad_fn.apply(dout.type(q.dtype), dlse.type(q.dtype))
-            
-            block_dq_buffer = out[0]
-            block_dk_buffer = out[1]
-            block_dv_buffer = out[2]
-            """
-
             o = attention_backward(
                 query=q,
                 key=k,
                 value=v,
                 out=out,
-                logsumexp=lse,
+                logsumexp=lse / math.log(2),
                 grad_out=dout,
                 grad_logsumexp=dlse,
                 scale=scale,

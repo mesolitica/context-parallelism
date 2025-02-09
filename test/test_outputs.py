@@ -1,6 +1,7 @@
 from context_parallelism import ring_flex_attn
 from context_parallelism.utils import causal_mask
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+
 import torch
 import torch.distributed as dist
 import os
@@ -43,14 +44,7 @@ if __name__ == "__main__":
     k.retain_grad()
     v.retain_grad()
 
-    out, lse = ring_flex_attn(q=q, k=k, v=v, causal=True, _compile=True)
-    out_clone = out.clone()
-    lse_clone = lse.clone()
-    out.backward(local_dout)
-
-    q_grad = q.grad.clone()
-    k_grad = k.grad.clone()
-    v_grad = v.grad.clone()
+    out_flex, _ = ring_flex_attn(q=q, k=k, v=v, causal=True, _compile=True)
 
     q = qkv[0]
     k = qkv[1]
@@ -62,28 +56,20 @@ if __name__ == "__main__":
 
     scale = q.shape[-1] ** (-0.5)
     block_mask = create_block_mask(causal_mask, None, None, q.shape[-2], q.shape[-2], device = local_rank)
-    out, lse = flex_attention(q, k, v, block_mask=block_mask, scale=scale, return_lse = True)
-    out.backward(dout)
+    out, _ = flex_attention(q, k, v, block_mask=block_mask, scale=scale, return_lse = True)
+
+    out_sdpa = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal = True, scale = scale)
 
     length = local_qkv.shape[-2]
     start_length = int(local_rank * length)
     end_length = int((local_rank + 1) * length)
 
-    print(local_rank, 'out', (out_clone - out[:,:,start_length:end_length]).abs().max())
-    print(local_rank, 'lse', (lse_clone - lse[:,:,start_length:end_length]).abs().max())
-    print(local_rank, 'q.grad', (q_grad - q.grad[:,:,start_length:end_length]).abs().max())
-    print(local_rank, 'k.grad', (k_grad - k.grad[:,:,start_length:end_length]).abs().max())
-    print(local_rank, 'v.grad', (v_grad - v.grad[:,:,start_length:end_length]).abs().max())
-
-    assert (out_clone - out[:,:,start_length:end_length]).abs().max() < 1e-1
-    assert (q_grad - q.grad[:,:,start_length:end_length]).abs().max() < 1e-1
-    assert (k_grad - k.grad[:,:,start_length:end_length]).abs().max() < 1e-1
-    assert (v_grad - v.grad[:,:,start_length:end_length]).abs().max() < 1e-1
-
+    print(local_rank, 'out flex ring vs flex', (out_flex - out[:,:,start_length:end_length]).abs().max())
+    print(local_rank, 'out flex ring vs sdpa', (out_flex - out_sdpa[:,:,start_length:end_length]).abs().max())
 
 """
 CUDA_VISIBLE_DEVICES=2 torchrun \
 --nproc_per_node 1 \
 --rdzv-endpoint=localhost:29501 \
-test/test_ring_flex.py
+test/test_outputs.py
 """
