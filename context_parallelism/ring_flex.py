@@ -2,7 +2,7 @@ import torch
 import torch.distributed as dist
 import math
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
-from .utils import merge_attention, RingComm, causal_mask
+from .utils import merge_attention, RingComm, causal_mask, is_compiled_module
 from .backward import attention_backward
 
 """
@@ -89,6 +89,7 @@ def _forward(
     v: torch.Tensor,
     scale: float,
     causal: bool = True,
+    _compile: bool = False,
 ):
     """
     q: [B, H, L, D]
@@ -115,7 +116,8 @@ def _forward(
                         None, 
                         q.shape[-2], 
                         q.shape[-2], 
-                        device = comm.rank
+                        device = comm.rank,
+                        _compile=_compile
                     )
                 else:
                     block_mask = None
@@ -138,15 +140,16 @@ def _forward(
 
 def _backward(
     process_group,
-    dout,
-    dlse,
-    q,
-    k,
-    v,
-    out,
-    lse,
-    scale,
-    causal=True,
+    dout: torch.Tensor,
+    dlse: torch.Tensor,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    out: torch.Tensor,
+    lse: torch.Tensor,
+    scale: float,
+    causal: bool = True,
+    _compile: bool = False,
 ):
     kv_comm = RingComm(process_group)
     d_kv_comm = RingComm(process_group)
@@ -251,17 +254,19 @@ class RingFlexAttnFunc(torch.autograd.Function):
         scale,
         causal,
         group,
+        _compile,
     ):
         if scale is None:
             scale = q.shape[-1] ** (-0.5)
 
         k = k.contiguous()
         v = v.contiguous()
-        out, lse = _forward(group, q, k, v, scale=scale)
+        out, lse = _forward(group, q, k, v, scale=scale, _compile=_compile)
         ctx.save_for_backward(q, k, v, out, lse)
         ctx.scale = scale
         ctx.causal = causal
         ctx.group = group
+        ctx._compile = _compile
         return out, lse
 
     @staticmethod
@@ -278,8 +283,9 @@ class RingFlexAttnFunc(torch.autograd.Function):
             lse,
             scale=ctx.scale,
             causal=ctx.causal,
+            _compile=ctx._compile,
         )
-        return dq, dk, dv, None, None, None
+        return dq, dk, dv, None, None, None, None
 
 def ring_flex_attn(
     q,
@@ -288,5 +294,13 @@ def ring_flex_attn(
     scale=None,
     causal=False,
     group=None,
+    _compile=False,
 ):
-    return RingFlexAttnFunc.apply(q, k, v, scale, causal, group)
+    global flex_attention, merge_attention
+
+    if _compile and not is_compiled_module(flex_attention):
+        flex_attention = torch.compile(flex_attention)
+    if _compile and not is_compiled_module(merge_attention):
+        merge_attention = torch.compile(merge_attention)
+        
+    return RingFlexAttnFunc.apply(q, k, v, scale, causal, group, _compile)

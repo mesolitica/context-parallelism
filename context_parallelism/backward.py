@@ -45,6 +45,5 @@ def attention_backward(
     grad_value = softmax_scores.to(query.dtype).transpose(-2, -1) @ grad_out
     grad_query = torch.zeros(query.shape).to(query.device)
     grad_key = torch.zeros(key.shape).to(query.device)
-    print('grad_value aaaa', grad_value)
     return grad_query, grad_key, grad_value
 

@@ -3,7 +3,16 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from typing import Optional, Tuple
 
+
 causal_mask = lambda b, h, q_idx, kv_idx: q_idx >= kv_idx
+
+def is_compiled_module(module):
+    """
+    Check whether the module was compiled with torch.compile()
+    """
+    if not hasattr(torch, "_dynamo"):
+        return False
+    return isinstance(module, torch._dynamo.eval_frame.OptimizedModule)
 
 def merge_attention(a, lse_a, b, lse_b):
     if a is None:

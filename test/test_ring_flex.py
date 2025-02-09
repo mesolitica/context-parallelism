@@ -43,7 +43,7 @@ if __name__ == "__main__":
     k.retain_grad()
     v.retain_grad()
 
-    out, lse = ring_flex_attn(q=q, k=k, v=v, causal=True)
+    out, lse = ring_flex_attn(q=q, k=k, v=v, causal=True, _compile=True)
     out_clone = out.clone()
     lse_clone = lse.clone()
     out.backward(local_dout)
