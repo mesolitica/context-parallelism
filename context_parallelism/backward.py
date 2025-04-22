@@ -39,7 +39,7 @@ def attention_backward(
             query.shape[-2], 
         )
     else:
-        block_mask = _create_empty_block_mask(q, k)
+        block_mask = _create_empty_block_mask(query, key)
 
     block_mask = block_mask.as_tuple()
     example_vals = (

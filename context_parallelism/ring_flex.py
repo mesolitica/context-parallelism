@@ -131,6 +131,7 @@ def _forward(
                     return_lse=True
                 )
                 out, lse = merge_attention(out, lse, block_out, block_lse)
+                out = out.to(q.dtype)
 
         if step + 1 != comm.world_size:
             comm.wait()
